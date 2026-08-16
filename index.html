@@ -2294,7 +2294,7 @@ const SIGNAL_THEMES = [
 const STORAGE_KEY = 'builmatel_board_state_v2';
 const SHARED = true;
 // ★★★ GASを再デプロイしたら、ここに新しいウェブアプリURLを貼り付けてください ★★★
-const GAS_URL = 'https://script.google.com/macros/s/AKfycbwXi6q-Az6VmCJSgFAuvFZXFyH4ZRyG9rh6a5QbZ0GZha9jzRv1DgqjJWrbN04atOPQAw/exec';
+const GAS_URL = 'https://script.google.com/macros/s/AKfycbxPd34_67JneQ-Dc7l8YzB_5GUqjyggImAtMJMj5zjahtz4_RfOp0wikbTUL63qC3DF/exec';
 
 // ============================================================
 // ★ 同期エンジン（v2）
@@ -2526,6 +2526,36 @@ let actionFilter = 'all';
 let actionAssigneeFilter = 'all';
 let selectedActions = new Set();
 let expandedThemes = new Set();
+
+// ------------------------------------------------------------
+// ★ 入力者は「この端末だけ」の設定
+//    共有データ(state)には保存しないため、PCは鳩崎さん・スマホは山崎さん
+//    のように端末ごとに別々の入力者を設定できます。
+//    （以前は共有データに入っていたため、片方が切り替えると
+//      もう片方の入力者まで変わってしまっていました）
+// ------------------------------------------------------------
+const USER_KEY = 'builmatel_board_current_user';
+let localUserId = null;
+function readStoredUserId() {
+  try { return window.localStorage.getItem(USER_KEY); } catch (e) { return null; }
+}
+function writeStoredUserId(id) {
+  try { window.localStorage.setItem(USER_KEY, id); } catch (e) { /* 保存できない環境ではタブを閉じるまで有効 */ }
+}
+function getCurrentUserId() {
+  const people = getEffectivePersons().filter(p => p.id !== 'other');
+  const isValid = id => !!id && people.some(p => p.id === id);
+  if (isValid(localUserId)) return localUserId;
+  const stored = readStoredUserId();
+  if (isValid(stored)) { localUserId = stored; return localUserId; }
+  // 初回のみ: 旧データの値 → それも無ければ先頭のメンバー
+  const fallback = (state && isValid(state.currentUserId))
+    ? state.currentUserId
+    : (people[0] ? people[0].id : 'hato');
+  localUserId = fallback;
+  writeStoredUserId(fallback);
+  return localUserId;
+}
 
 /**
  * ★ 修正の要：読み込みに失敗してもサンプルデータで上書き保存しない。
@@ -2764,10 +2794,10 @@ function renderSidebarNav() {
 }
 function renderSidebarUserSwitcher() {
   const container = document.getElementById('sidebar-user-switcher');
-  const cur = state.currentUserId;
+  const cur = getCurrentUserId();
   if (container) {
     container.innerHTML = `
-      <div class="sidebar-user-label">入力者</div>
+      <div class="sidebar-user-label">この端末の入力者</div>
       ${getEffectivePersons().filter(p => p.id !== 'other').map(p => `
         <button class="sidebar-user-btn ${cur === p.id ? 'active' : ''}" onclick="setCurrentUser('${p.id}')">
           <div class="avatar avatar-xs ${p.avatarClass}">${p.initial}</div>
@@ -2791,15 +2821,18 @@ function renderSidebarUserSwitcher() {
   }
 }
 function openUserSwitchDrawer() {
-  const cur = state.currentUserId;
+  const cur = getCurrentUserId();
   document.getElementById('modal-container').innerHTML = `
     <div class="modal-backdrop" onclick="if(event.target===this)closeModal()">
       <div class="modal" style="max-width:360px;">
         <div class="modal-head">
-          <div class="modal-title">入力者を切替</div>
+          <div class="modal-title">この端末の入力者を切替</div>
           <button class="modal-close" onclick="closeModal()"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
         </div>
         <div class="modal-body" style="padding:8px 0;">
+          <div style="font-size:11px;color:var(--ink-400);padding:0 20px 10px;line-height:1.6;">
+            この設定はこの端末にだけ保存されます。他の方の画面には影響しません。
+          </div>
           ${getEffectivePersons().filter(p => p.id !== 'other').map(p => `
             <button onclick="setCurrentUser('${p.id}');closeModal();"
               style="display:flex;align-items:center;gap:12px;width:100%;padding:12px 20px;border:none;background:${p.id===cur?'var(--ink-900)':'transparent'};color:${p.id===cur?'var(--paper)':'var(--ink-700)'};cursor:pointer;font-family:inherit;font-size:14px;font-weight:500;text-align:left;transition:background 0.15s;">
@@ -3279,7 +3312,7 @@ async function resetCurrentSignals() {
 // ============================================================
 function renderQual() {
   const m = getCurrentMeeting();
-  const cur = state.currentUserId;
+  const cur = getCurrentUserId();
   return `
     <div class="page-intro">
       <div class="page-intro-eyebrow">QUALITATIVE PREP</div>
@@ -3420,11 +3453,12 @@ function renderQual() {
     `}).join('')}
   `;
 }
-async function setCurrentUser(id) {
-  state.currentUserId = id;
+function setCurrentUser(id) {
+  localUserId = id;
+  writeStoredUserId(id);
   renderSidebarUserSwitcher();
   renderPage();
-  await saveState();
+  // ★ 共有データには保存しない（他の端末の入力者を変えてしまわないため）
 }
 function getPillarComments(m, pillarId) {
   const v = m.pillarUpdates[pillarId];
@@ -3434,7 +3468,7 @@ function getPillarComments(m, pillarId) {
 }
 async function updatePillarComment(pillarId, value) {
   const m = getCurrentMeeting();
-  const cur = state.currentUserId;
+  const cur = getCurrentUserId();
   const comments = getPillarComments(m, pillarId);
   const existing = comments.find(c => c.authorId === cur);
   if (!value.trim()) {
@@ -3455,7 +3489,7 @@ async function addTopic() {
   m.topics = m.topics || [];
   m.topics.push({
     id: 'topic_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
-    authorId: state.currentUserId,
+    authorId: getCurrentUserId(),
     title: '',
     comments: [],
     transcript: '', conclusion: '', actions: []
@@ -3493,13 +3527,13 @@ async function autoSaveTopicComment(topicId, value) {
   const t = (m.topics || []).find(x => x.id === topicId);
   if (!t) return;
   t.comments = t.comments || [];
-  const existing = t.comments.find(c => c.authorId === state.currentUserId);
+  const existing = t.comments.find(c => c.authorId === getCurrentUserId());
   if (existing) {
     existing.text = value;
   } else {
     t.comments.push({
       id: 'c_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
-      authorId: state.currentUserId,
+      authorId: getCurrentUserId(),
       text: value
     });
   }
@@ -3908,7 +3942,7 @@ function openAddActionModal(type, id, label) {
             <div style="display: flex; gap: 8px; flex-wrap: wrap;">
               ${getEffectivePersons().filter(p => p.id !== 'other').map(p => `
                 <label style="display: flex; align-items: center; gap: 8px; padding: 8px 12px; border: 1px solid var(--ink-200); border-radius: var(--radius); cursor: pointer; flex: 1; min-width: 120px;">
-                  <input type="checkbox" name="act-assignee" value="${p.id}" ${p.id === state.currentUserId ? 'checked' : ''}>
+                  <input type="checkbox" name="act-assignee" value="${p.id}" ${p.id === getCurrentUserId() ? 'checked' : ''}>
                   <div class="avatar avatar-xs ${p.avatarClass}">${p.initial}</div>
                   <span style="font-size: 13px;">${escapeHtml(p.name)}</span>
                 </label>
@@ -4341,7 +4375,7 @@ function openAddActionFromActionsPage() {
   const defaultDeadline = new Date();
   defaultDeadline.setDate(defaultDeadline.getDate() + 7);
   const dStr = defaultDeadline.toISOString().slice(0,10);
-  const cur = state.currentUserId;
+  const cur = getCurrentUserId();
   document.getElementById('modal-container').innerHTML = `
     <div class="modal-backdrop" onclick="if(event.target===this)closeModal()">
       <div class="modal">
@@ -5027,7 +5061,7 @@ function openAddLogAction(meetingId) {
   const defaultDeadline = new Date();
   defaultDeadline.setDate(defaultDeadline.getDate() + 7);
   const dStr = defaultDeadline.toISOString().slice(0,10);
-  const cur = state.currentUserId;
+  const cur = getCurrentUserId();
   document.getElementById('modal-container').innerHTML = `
     <div class="modal-backdrop" onclick="if(event.target===this)closeModal()">
       <div class="modal">
@@ -5237,7 +5271,7 @@ function renderHowTo() {
       </div>
       <div class="howto-tip">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:1px;"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-        <span><strong>入力者の切り替え方：</strong>PC では画面左下の名前一覧から選択してください。スマートフォンでは画面右上のボタン（名前が表示されている部分）をタップして切り替えられます。</span>
+        <span><strong>入力者の切り替え方：</strong>PC では画面左下の名前一覧から選択してください。スマートフォンでは画面右上のボタン（名前が表示されている部分）をタップして切り替えられます。<br>この設定は<strong>お使いの端末にだけ保存される</strong>ので、一度選べば次回からそのままです。他の方の画面が変わることもありません。</span>
       </div>
       <div class="howto-two-col">
         <div class="howto-card">
